@@ -32,7 +32,7 @@ class TableDAL:
             ),
             {"name": table_name},
         )
-        return result.scalar() > 0
+        return bool(result.scalar())
 
     def get_all_tables(self) -> list[str]:
         result = self._session.execute(
