@@ -2,22 +2,20 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.exceptions import TableAlreadyExistsError, TableNotFoundError
-from src.models import ColumnModel, TableModel
+from src.models import ColumnModel
 
 
 class TableDAL:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_table(self, table: TableModel) -> None:
-        if self.table_exists(table.name):
-            raise TableAlreadyExistsError(table.name)
+    def create_table(self, table_name: str, columns: list[ColumnModel]) -> None:
+        if self.table_exists(table_name):
+            raise TableAlreadyExistsError(table_name)
         columns_sql = ", ".join(
-            f"{col.name} {col.type.value}" for col in table.columns
+            f"{col.name} {col.type.value}" for col in columns
         )
-        self._session.execute(
-            text(f"CREATE TABLE {table.name} ({columns_sql})")
-        )
+        self._session.execute(text(f"CREATE TABLE {table_name} ({columns_sql})"))
 
     def drop_table(self, table_name: str) -> None:
         if not self.table_exists(table_name):

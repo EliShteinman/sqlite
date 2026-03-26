@@ -6,6 +6,7 @@ from src.enums import ColumnType
 class ColumnModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    table_name: str
     name: str
     type: ColumnType
 
@@ -14,7 +15,6 @@ class TableModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    columns: list[ColumnModel] = Field(default_factory=list)
 
 
 class DatabaseModel(BaseModel):
@@ -22,3 +22,4 @@ class DatabaseModel(BaseModel):
 
     max_size_mb: int
     tables: list[TableModel] = Field(default_factory=list)
+    columns: list[ColumnModel] = Field(default_factory=list)
