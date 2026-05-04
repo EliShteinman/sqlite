@@ -2223,11 +2223,11 @@ crdb-cli crdb list
 <span class="cmt"># סטטוס מפורט</span>
 crdb-cli crdb get --crdb-guid &lt;guid&gt;
 
-<span class="cmt"># סטטוס סנכרון</span>
-crdb-cli crdb-tasks --crdb-guid &lt;guid&gt;
+<span class="cmt"># רשימת tasks (כולל מצב סנכרון)</span>
+crdb-cli task list
 
-<span class="cmt"># Lag של syncer</span>
-sudo /opt/redislabs/bin/rladmin status syncer
+<span class="cmt"># סטטוס task ספציפי</span>
+crdb-cli task status --task-id &lt;task-id&gt;
 
 <span class="cmt"># בדיקת בריאות של CRDB</span>
 crdb-cli crdb health-report --crdb-guid &lt;guid&gt;</pre>
@@ -2397,15 +2397,21 @@ crdb-cli crdb health-report --crdb-guid &lt;guid&gt;</pre>
     <div class="card accent">
       <h3>מה לעשות אם רוצים לכבות את ה-Syncer</h3>
       <h4>1. השעיה זמנית של CRDB instance</h4>
-      <pre class="code"><span class="cmt"># השעיית סנכרון של CRDB</span>
-crdb-cli crdb stop --crdb-guid &lt;guid&gt;
+      <pre class="code"><span class="cmt"># שינוי מצב הסנכרון דרך REST API (BDB syncer state)</span>
+<span class="cmt"># הפסקה — set state to "stopped"</span>
+curl -k -u &lt;email&gt;:&lt;pass&gt; -X PUT \
+  -H 'Content-Type: application/json' \
+  https://&lt;cluster&gt;:9443/v1/bdbs/&lt;bdb-id&gt;/syncer_state/crdt \
+  -d '{"state": "stopped"}'
 
-<span class="cmt"># הפעלה מחדש</span>
-crdb-cli crdb start --crdb-guid &lt;guid&gt;</pre>
+<span class="cmt"># הפעלה מחדש — set state to "running"</span>
+curl -k -u &lt;email&gt;:&lt;pass&gt; -X PUT \
+  -H 'Content-Type: application/json' \
+  https://&lt;cluster&gt;:9443/v1/bdbs/&lt;bdb-id&gt;/syncer_state/crdt \
+  -d '{"state": "running"}'</pre>
 
       <h4>2. הסרת cluster מ-CRDB</h4>
-      <pre class="code">crdb-cli crdb update --crdb-guid &lt;guid&gt; \
-  --instances-list-clear-on-restore \
+      <pre class="code">crdb-cli crdb remove-instance --crdb-guid &lt;guid&gt; \
   --instance-id &lt;id-of-cluster-to-remove&gt;</pre>
 
       <h4>3. עצירת תהליך ה-syncer בלבד (לדיבוג)</h4>
@@ -2449,17 +2455,16 @@ crdb-cli crdb start --crdb-guid &lt;guid&gt;</pre>
     <pre class="code"><span class="cmt"># 1. בדיקה איפה ה-syncer ואיפה ה-master shards</span>
 sudo /opt/redislabs/bin/rladmin status nodes
 sudo /opt/redislabs/bin/rladmin status shards
-sudo /opt/redislabs/bin/rladmin status modules <span class="cmt"># כולל syncer location</span>
+sudo /opt/redislabs/bin/rladmin info db &lt;db-name&gt; <span class="cmt"># מידע מפורט על BDB</span>
 
 <span class="cmt"># 2. הזזת ה-master shard לנוד שעליו רץ ה-syncer</span>
 sudo /opt/redislabs/bin/rladmin migrate shard &lt;shard-id&gt; target_node &lt;node-with-syncer&gt;
 
-<span class="cmt"># 3. או הפוך — להזיז את ה-syncer לנוד שיש בו master shards</span>
-<span class="cmt"># זה דרך rladmin tune או דרך crdb-cli</span>
-crdb-cli crdb update --crdb-guid &lt;guid&gt; --syncer-node-id &lt;target-node-id&gt;
-
-<span class="cmt"># 4. לוודא שה-failover יעדיף לקדם replica שעל אותו node</span>
-sudo /opt/redislabs/bin/rladmin tune db &lt;db-name&gt; max_aof_load_time 0</pre>
+<span class="cmt"># 3. אופציה משלימה: להפעיל Distributed synchronization mode</span>
+<span class="cmt"># כדי שתעבורת ה-sync תתפזר על כל ה-proxy endpoints,</span>
+<span class="cmt"># דורש proxy policy של all-nodes או all-master-shards</span>
+sudo /opt/redislabs/bin/rladmin bind db &lt;db-name&gt; \
+  endpoint &lt;endpoint-id&gt; policy all-master-shards</pre>
 
     <div class="alert danger">
       <b>בעיה עיקרית:</b> כשתעבורה רבה, יכול להיווצר <b>broker effect</b> — הנוד שעליו רץ ה-syncer הופך ל-bottleneck. בודקים את זה דרך <code class="inline">stats_archiver</code> — אם תעבורת הרשת על אותו נוד גבוהה משמעותית מהאחרים.
@@ -2724,14 +2729,17 @@ sudo /opt/redislabs/bin/rlcheck</pre>
     <summary>9. במידה ואצטרך לכבות את ה-syncer כיצד אעשה זאת? ומה יראה ה-UI אחרי הכיבוי?</summary>
     <div class="ans">
       <p><b>איך לכבות:</b></p>
-      <pre class="code"><span class="cmt"># השעיית CRDB instance</span>
-crdb-cli crdb stop --crdb-guid &lt;guid&gt;
+      <pre class="code"><span class="cmt"># הפסקת syncer דרך REST API (state → stopped)</span>
+curl -k -u &lt;email&gt;:&lt;pass&gt; -X PUT \
+  -H 'Content-Type: application/json' \
+  https://&lt;cluster&gt;:9443/v1/bdbs/&lt;bdb-id&gt;/syncer_state/crdt \
+  -d '{"state": "stopped"}'
 
-<span class="cmt"># עצירת תהליך ה-syncer</span>
-sudo supervisorctl stop crdb_syncer:*
+<span class="cmt"># הסרת קלאסטר ספציפי מ-CRDB</span>
+crdb-cli crdb remove-instance --crdb-guid &lt;guid&gt; --instance-id &lt;id&gt;
 
-<span class="cmt"># הסרת קלאסטר מ-CRDB</span>
-crdb-cli crdb update --crdb-guid &lt;guid&gt; --instances-list-clear-on-restore</pre>
+<span class="cmt"># מחיקה סופית של ה-CRDB</span>
+crdb-cli crdb delete --crdb-guid &lt;guid&gt;</pre>
 
       <p><b>מה יראה ה-UI:</b></p>
       <ul>
@@ -2766,14 +2774,16 @@ crdb-cli crdb update --crdb-guid &lt;guid&gt; --instances-list-clear-on-restore<
 sudo /opt/redislabs/bin/rladmin migrate shard &lt;shard-id&gt; \
   target_node &lt;node-with-syncer&gt;
 
-<span class="cmt"># 2. אופציה ב: להזיז את ה-syncer לנוד עם רוב ה-masters</span>
-crdb-cli crdb update --crdb-guid &lt;guid&gt; \
-  --syncer-node-id &lt;target-node-id&gt;
+<span class="cmt"># 2. אופציה ב: להפעיל Distributed synchronization mode</span>
+<span class="cmt"># כדי לפזר את תעבורת ה-sync על כל proxy endpoint זמין</span>
+<span class="cmt"># (מצריך proxy policy של all-master-shards או all-nodes)</span>
+sudo /opt/redislabs/bin/rladmin bind db &lt;db-name&gt; \
+  endpoint &lt;endpoint-id&gt; policy all-master-shards
 
-<span class="cmt"># 3. אופציה ג: לוודא שה-rebalance שומר על co-location</span>
+<span class="cmt"># 3. אופציה ג: שינוי shard placement policy</span>
 sudo /opt/redislabs/bin/rladmin tune cluster \
   default_shards_placement dense</pre>
-      <p><b>בדיקה אחרי הפתרון</b>: <code class="inline">rladmin status syncer</code> — לוודא שה-lag חזר לטווח רגיל (&lt; 100ms).</p>
+      <p><b>בדיקה אחרי הפתרון</b>: <code class="inline">crdb-cli task list</code> ו-<code class="inline">crdb-cli crdb get --crdb-guid &lt;guid&gt;</code> — לוודא שמצב הסנכרון תקין.</p>
     </div>
   </details>
 
