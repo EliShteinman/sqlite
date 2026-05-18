@@ -1,0 +1,24 @@
+watch -n 1 -d '
+echo "============================================"
+echo "  ROOT FILESYSTEM (/)  -  ⚠️  CRITICAL"
+echo "============================================"
+df -h / | tail -1
+echo ""
+echo "============================================"
+echo "  REDIS PARTITION (/var/opt/redislabs)"
+echo "============================================"
+df -h /var/opt/redislabs | tail -1
+echo ""
+echo "============================================"
+echo "  /tmp CONTENTS  -  SHOULD STAY EMPTY"
+echo "============================================"
+ls -lah /tmp/debuginfo* 2>/dev/null || echo "  (clean - no debuginfo files)"
+du -sh /tmp 2>/dev/null
+echo ""
+echo "============================================"
+echo "  DEBUGINFO DIRECTORY  -  SHOULD GROW HERE"
+echo "============================================"
+ls -lah /var/opt/redislabs/debuginfo/ 2>/dev/null | tail -15
+echo ""
+du -sh /var/opt/redislabs/debuginfo/ 2>/dev/null
+'
