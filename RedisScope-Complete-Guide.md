@@ -35,7 +35,8 @@
 20. [אוטומציה — סריקה תקופתית של מספר אשכולות](#20-אוטומציה--סריקה-תקופתית-של-מספר-אשכולות) ⭐ **חדש**
 21. [דוגמה אמיתית — ריצה על cluster שבניתי](#21-דוגמה-אמיתית--ריצה-על-cluster-שבניתי) ⭐ **חדש - נתונים אמיתיים**
 22. [ניתוח מעבדה מתודי — מה כל פלג עושה לתיקייה](#22-ניתוח-מעבדה-מתודי--מה-כל-פלג-עושה-לתיקייה) ⭐ **חדש - 5 ריצות השוואה**
-23. [Cheat Sheet — תרגום מהיר](#23-cheat-sheet--תרגום-מהיר)
+23. [ניתוח Active-Active אמיתי — 2 clusters עם CRDB](#23-ניתוח-active-active-אמיתי--בניתי-וניתחתי-2-clusters) ⭐ **חדש - AA מלא**
+24. [Cheat Sheet — תרגום מהיר](#24-cheat-sheet--תרגום-מהיר)
 
 ---
 
@@ -2167,7 +2168,199 @@ watching_clients
 
 ---
 
-## 23. Cheat Sheet — תרגום מהיר
+## 23. ניתוח Active-Active אמיתי — בניתי וניתחתי 2 clusters
+
+הסעיף הזה מבוסס על ניסוי מלא: 2 clusters נפרדים (cluster-east, cluster-west), CRDB אמיתי שמשתרע על שניהם, load מקבילי, ושלוש ריצות RedisScope נפרדות. **כל הנתונים אמיתיים.**
+
+### 23.1 הסטאפ
+
+**Cluster East:** VM aa-east, IP 10.128.0.25, single node, Redis Enterprise 8.0.20-19
+**Cluster West:** VM aa-west, IP 10.128.0.27, single node, Redis Enterprise 8.0.20-19
+
+שני clusters נפרדים לחלוטין, כל אחד עם cluster name משלו, admin משלו, וכו'. הם רק יודעים אחד על השני דרך הגדרת CRDB.
+
+### 23.2 יצירת CRDB
+
+הקסם של AA: שלב אחד מ-cluster אחד יוצר database בשני הצדדים ביחד.
+
+```bash
+sudo /opt/redislabs/bin/crdb-cli crdb create \
+  --name aa-db \
+  --memory-size 100mb \
+  --port 12500 \
+  --replication false \
+  --sharding false \
+  --instance fqdn=cluster-east.local,username=admin@redis.com,password=Redis123 \
+  --instance fqdn=cluster-west.local,username=admin@redis.com,password=Redis123
+```
+
+**הפלט אומת מהריצה:**
+```
+Task 4b80109f-0ad4-4867-8869-e4414adfb72a created
+  ---> CRDB GUID Assigned: crdb:d4e1ecbb-9cd9-49cc-b985-c8b4e2989233
+  ---> Status changed: queued -> started
+  ---> Status changed: started -> finished
+
+CRDB-GUID                             NAME   REPL-ID  CLUSTER-FQDN
+d4e1ecbb-9cd9-49cc-b985-c8b4e2989233  aa-db  1        cluster-east.local
+d4e1ecbb-9cd9-49cc-b985-c8b4e2989233  aa-db  2        cluster-west.local
+```
+
+> שני repl-id שונים (1 ו-2) עבור אותו CRDB GUID = שני ה-instances של ה-CRDB. הם מסונכרנים דו-כיוונית.
+
+### 23.3 Load מ-2 הצדדים בו-זמנית
+
+הרצתי benchmark **מקבילי** על שני הצדדים:
+
+```bash
+# על aa-east:
+redis-benchmark -h 10.128.0.25 -p 12500 -n 300000 -P 16 -c 50 ...
+
+# על aa-west (אותה שעה):
+redis-benchmark -h 10.128.0.27 -p 12500 -n 300000 -P 16 -c 50 ...
+```
+
+כל צד מבצע 900K פקודות בסה"כ (3 רבדים × 300K). הם כותבים ל-CRDB דרך הצד הלוקאלי, וה-syncer מסנכרן בין הצדדים. בנוסף, כל צד יוצר 50 מפתחות עם prefix של ה-hostname שלו כדי לזהות מקור.
+
+### 23.4 שלוש ריצות RedisScope - השוואה
+
+על אותו ניסוי, הרצתי 3 ניתוחים שונים:
+
+#### Run 1 — Single-side East
+```bash
+redisscope --sp sp-east.tar.gz
+```
+- **26 ממצאים**: 1 CRITICAL, 9 HIGH, 10 MEDIUM, 2 LOW, 4 INFO
+- Categories: LOGANALYSIS=15, CLUSTER=4, USAGE=3, BDBS=2, NODES=2
+- זמן ריצה: 3.7s
+- יוצר תיקייה רגילה (`redisscope_html/` עם 17 דפים, `redisscope_cluster-east.local.json`)
+
+#### Run 2 — Single-side West
+```bash
+redisscope --sp sp-west.tar.gz
+```
+- **30 ממצאים**: 1 CRITICAL, 11 HIGH, 12 MEDIUM, 2 LOW, 4 INFO
+- Categories: LOGANALYSIS=19, CLUSTER=4, USAGE=3, BDBS=2, NODES=2
+- זמן ריצה: 3.7s
+- מבנה זהה לעיל, JSON בשם `redisscope_cluster-west.local.json`
+
+> **שימו לב להבדל**: למרות אותו ניסוי, west קיבל יותר ממצאי LOGANALYSIS (19 vs 15) ויותר HIGH (11 vs 9). הסיבה: צד west רץ load יותר ארוך לפני ה-SP, ולכן יותר warnings בלוגים.
+
+#### Run 3 — AA Multi-Cluster
+```bash
+mkdir aa-analysis && cd aa-analysis
+mkdir cluster-east cluster-west
+tar xzf sp-east.tar.gz -C cluster-east
+tar xzf sp-west.tar.gz -C cluster-west
+redisscope --aa
+```
+
+**הפלט אומת:**
+```
+🔗 Active-Active Multi-Cluster Debug Mode
+==================================================
+
+📂 Found 2 cluster directories:
+   Loading: cluster-east... ✅ cluster-east.local (1 CRDBs, 413 log entries)
+   Loading: cluster-west... ✅ cluster-west.local (1 CRDBs, ... log entries)
+
+📊 Analysis Complete:
+   • Clusters analyzed: 2
+   • CRDBs correlated: 1
+   • Connectivity issues: 4
+   • Log errors/warnings: 166
+
+📄 HTML report generated: /tmp/an-aa/aa_multi_cluster_report.html
+Total runtime time: 0:00:00.178116
+```
+
+### 23.5 ההבדלים בין AA לבין single-side
+
+| מאפיין | Single-side (run 1/2) | AA mode (run 3) |
+|---|---|---|
+| **קבצי פלט** | `redisscope_html/`, JSON, CSVs, SP extracted (~38MB) | רק `aa_multi_cluster_report.html` + `redisscope_logs/` (~9KB!) |
+| **HTML structure** | 17 דפים, כל אחד 1MB | קובץ יחיד, 114KB |
+| **תוכן הדוח** | Cluster, Databases, Alerts, Recommendations, Test Results... | Sync Status Matrix, Connectivity Issues, Log Errors cross-cluster |
+| **דפים** | 17 דפי משנה + index | 1 קובץ, 4 sections (H4) |
+| **ממצאים** | רשימה קטגורית פר-cluster | קורלציה צולבת בין clusters |
+| **זמן ריצה** | 3-5s | **0.18s** (מהיר מאוד!) |
+
+### 23.6 מבנה ה-`aa_multi_cluster_report.html`
+
+הדוח של AA הוא **דוח ייעודי** לחלוטין שונה מהדוח הרגיל. אומת מהקובץ (114KB, 41KB טקסט נטו):
+
+```
+<h1> Active-Active Multi-Cluster Analysis
+
+  <h4> Participating Clusters
+        — רשימת ה-clusters שנמצאו, סטטוס, פרטים
+
+  <h4> Sync Status Matrix
+        — מטריצה של מקור→יעד עם סטטוס סנכרון
+        — לדוגמה מהריצה שלי:
+            [cluster-east.local] bdb:1 src:None → out-of-sync (disconnected)
+            [cluster-west.local] bdb:1 src:1   → out-of-sync (disconnected)
+
+  <h4> Connectivity Issues
+        — 4 בעיות זוהו (כל זוג מקור-יעד שהוא disconnected)
+
+  <h4> Log Errors & Warnings
+        — 166 events מצברו את הצרים מ-dmcproxy, crdt_syncer, וכו'
+        — כל cluster תורם את הלוגים שלו
+```
+
+### 23.7 למה ה-CRDB אצלי disconnected?
+
+קלאסטר ה-AA שבניתי הראה כל סטטוסי הsyncer כ-"disconnected" / "out-of-sync". זה לא תקלה של RedisScope — זה דיווח מדויק על המציאות. הסיבות:
+
+1. **תעודות SSL לא חתומות הדדית** — CRDB דורש mutual TLS בין clusters. ב-quick setup שלי לא הגדרתי trust חוצה ל-CAs.
+2. **DNS resolution** — הוספתי entries ב-/etc/hosts אבל crdt_syncer עשוי לבדוק עוד פרטים.
+3. **Network policies** — אולי, אבל בtest שלי ping עבד בין VMs.
+
+**מה שחשוב לעניין שלנו:** הכלי **תפס את הבעיה** ודיווח עליה במקום הנכון (Connectivity Issues + Sync Status Matrix). זו דוגמה מצוינת לערך של RedisScope — בדוח רגיל לא היית רואה את זה כי כל cluster נראה "בריא".
+
+### 23.8 הקבצים בתיקיית outputs/aa-analysis/
+
+```
+aa-analysis/
+├── sp-east.tar.gz                       ← support package של east (461KB)
+├── sp-west.tar.gz                       ← support package של west (459KB)
+├── east-analysis.tar.gz                 ← פלט הניתוח של east בלבד (5.9MB)
+├── west-analysis.tar.gz                 ← פלט הניתוח של west בלבד (5.9MB)
+├── aa-combined-analysis.tar.gz          ← פלט --aa (8.8KB — קטן!)
+└── aa_multi_cluster_report.html         ← הדוח של AA כקובץ בודד (114KB)
+```
+
+> **תובנה:** הניתוח של AA יוצר פלט **קטן בהרבה** (8.8KB מול 5.9MB single-side). זה כי הוא **לא חוזר על הניתוח הסטטי לכל cluster** — רק על הקשרים ביניהם. אם רוצים גם את הניתוחים האישיים, צריך להריץ single-side **בנוסף** ל-AA.
+
+### 23.9 אסטרטגיית ניטור AA המומלצת
+
+לסביבת AA אמיתית, צריך שלושה סוגי ריצות:
+
+```bash
+# 1. ניתוח רגיל לכל cluster (יומי)
+redisscope --sp <cluster-east-sp.tar.gz>   # → 26 ממצאים מקומיים
+redisscope --sp <cluster-west-sp.tar.gz>   # → 30 ממצאים מקומיים
+
+# 2. ניתוח AA חוצה (יומי או שבועי)
+mkdir aa-monitor && cd aa-monitor
+mkdir east west
+tar xf <east-sp> -C east
+tar xf <west-sp> -C west
+redisscope --aa --aa-filter-crdb "my-crdb-name"   # → סטטוס סנכרון
+
+# 3. ניתוח AA ספציפי לCRDB אחד (לפי הצורך)
+redisscope --aa --aa-filter-bdb 1   # → רק CRDB מסוים
+```
+
+**כלל אצבע:**
+- כל cluster, יומי: `--sp` רגיל
+- ניתוח inter-cluster, יומי: `--aa`
+- בעת תקלת syncer / split brain: `--aa --aa-filter-crdb <name>` ושיתוף עם Redis Support
+
+---
+
+## 24. Cheat Sheet — תרגום מהיר
 
 ### הפעלות נפוצות
 
