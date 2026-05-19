@@ -31,13 +31,57 @@
 16. [מצב Kubernetes (מוסתר)](#16-מצב-kubernetes-מוסתר)
 17. [פתרון בעיות](#17-פתרון-בעיות)
 18. [אי-התאמות מול התיעוד הרשמי](#18-אי-התאמות-מול-התיעוד-הרשמי)
-19. [Cheat Sheet — תרגום מהיר](#19-cheat-sheet--תרגום-מהיר)
+19. [מה אתה רואה בדוח ה-HTML](#19-מה-אתה-רואה-בדוח-ה-html) ⭐ **חדש**
+20. [אוטומציה — סריקה תקופתית של מספר אשכולות](#20-אוטומציה--סריקה-תקופתית-של-מספר-אשכולות) ⭐ **חדש**
+21. [Cheat Sheet — תרגום מהיר](#21-cheat-sheet--תרגום-מהיר)
 
 ---
 
 ## 1. רקע
 
-**RedisScope** הוא כלי אבחון פנימי של Redis המנתח חבילות תמיכה (support packages) של Redis Enterprise ויוצר דוחות מקיפים בפורמט HTML וטקסט.
+**RedisScope** הוא כלי אבחון של Redis המנתח חבילות תמיכה (support packages) של Redis Enterprise ויוצר דוחות מקיפים בפורמט HTML וטקסט.
+
+### למי הכלי מיועד
+
+בעיקרון יש שתי שיטות שימוש:
+
+| שיטה | מי משתמש | יתרון |
+|---|---|---|
+| **שיתוף עם Redis Support** | לקוח Redis Enterprise שמייצר `debuginfo.tar.gz` ומעלה ל-Redis | מקבל ניתוח מקצועי מצוות Redis בחזרה |
+| **ניטור עצמי פנימי** | צוות SRE / DBA / DevOps שמתפעל cluster ב-Redis Enterprise פנימית | שליטה מלאה, פרטיות מלאה, ניטור פרואקטיבי תקופתי |
+
+המסמך הזה מתמקד בשיטה השנייה — **שימוש פנימי לניטור עצמי של הקלאסטרים שלך**. הכלי מאפשר לך:
+- להריץ ניתוח מלא של הקלאסטר ב-on-prem בלי לשתף נתונים עם אף גורם חיצוני
+- לבצע ניטור תקופתי (cron job) של מספר קלאסטרים
+- לזהות בעיות לפני שהן הופכות להתראות / קריסות
+- לנהל היסטוריית ניתוחים ולהשוות מצב לאורך זמן
+- להעריך מוכנות לשדרוג גרסה
+
+הפלג `--mask` קיים בכלי בדיוק בשביל לאפשר העברה החוצה כשבאמת חייבים — אבל **בשימוש פנימי לא צריך אותו**.
+
+### היכן זה רלוונטי בזרימת עבודה SRE
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  ניטור פרואקטיבי - לא ממתינים לתקלה                       │
+│  - cron job יומי/שבועי שמייצר report                       │
+│  - alerting על CRITICAL/HIGH חדשים                          │
+└────────────────────────────────────────────────────────────┘
+                                ↓
+┌────────────────────────────────────────────────────────────┐
+│  טיפול בבעיות פעילות - תחקיר תקלה                          │
+│  - מייצר report ad-hoc, מסנן זמנים בעיתיים (--start/--end) │
+│  - log analysis + failover analysis עבור התקרית            │
+└────────────────────────────────────────────────────────────┘
+                                ↓
+┌────────────────────────────────────────────────────────────┐
+│  הכנה לשדרוג גרסה                                            │
+│  - הרצה לפני שדרוג                                          │
+│  - 07_upgrade_healthcheck + recommendations                 │
+└────────────────────────────────────────────────────────────┘
+```
+
+### טכנולוגיה
 
 הכלי הוא בינארי standalone שנבנה באמצעות PyInstaller — כל קוד ה-Python, הספריות והבינארים הנדרשים ארוזים בתוך קובץ ELF יחיד בגודל כ-68MB. **אין צורך להתקין Python, pip או תלויות חיצוניות כלשהן** על השרת.
 
@@ -707,33 +751,52 @@ REDISSCOPE_DISABLE_JSON_EXPORT=1 ./redisscope --sp sp.tar.gz
 
 ## 10. מבנה הפלט
 
+> ⚠️ **שני הבהרות חשובות לפני שמתחילים** (אומתו ישירות מהקוד של v1.24.5):
+>
+> 1. **התיקייה `redisscope_upload_to_ticket/` שמוזכרת ב-PDF הישן — לא נוצרת בגרסה הזו.** הקבוע `UPLOAD_DIRECTORY` מוגדר ב-`general/const.py` אבל לא מיובא על ידי אף מודול אחר ולא נעשה בו שימוש. כנראה שזה fossil של refactoring שלא הושלם.
+> 2. **קובץ הדוח הראשי נקרא `redisscope_healthcheck_report.html`** (תמיד, שם קבוע). ה-PDF הישן הציג `redisscope_<directory_name>_Report.html` שזה **לא נכון** לגרסה הזו.
+
 לאחר ריצה מוצלחת, ייווצרו בתיקיית העבודה הנוכחית:
 
 ```
 .
-├── redisscope_<dirname>_Report.html      ← הדוח HTML המרכזי
+├── redisscope_healthcheck_report.html    ← הדוח HTML המרכזי (שם קבוע)
+├── aa_multi_cluster_report.html          ← רק במצב --aa
 ├── redisscope_all/                        ← כל הנתונים הגולמיים
 │   ├── *.json                            ← נתוני cluster, nodes, bdbs
 │   ├── *.txt                             ← פלט בפורמט טקסט
 │   └── ...
 ├── redisscope_html/                      ← דוחות HTML (לפריסת שרת)
 │   ├── index.html
-│   ├── nodes.html
-│   ├── bdbs.html
-│   ├── usage.html
-│   ├── errors.html
-│   └── assets/
-│       ├── css/
-│       ├── js/
-│       └── img/
+│   ├── pages/
+│   │   ├── cluster.html
+│   │   ├── databases.html
+│   │   ├── alerts.html
+│   │   ├── test_results.html
+│   │   ├── test_summary.html
+│   │   ├── timeline.html
+│   │   ├── recommendations.html
+│   │   ├── log_analysis.html
+│   │   ├── upgrade_healthcheck.html
+│   │   ├── rdi.html
+│   │   ├── crdb.html
+│   │   ├── failover.html
+│   │   ├── ccs.html
+│   │   ├── rladmin.html
+│   │   ├── replicaof.html
+│   │   ├── usage_report.html
+│   │   ├── k8s.html
+│   │   └── azure.html
+│   ├── certificate_report.html           ← דוח מתמחה לתעודות
+│   ├── cluster_watchdog_report.html      ← דוח מתמחה ל-watchdog
+│   ├── persistence_files_report.html     ← דוח מתמחה ל-AOF/RDB
+│   ├── ccs_viewer.html                   ← viewer ל-CCS
+│   └── (resources: css/, js/, img/)
 ├── redisscope_html_mask/                 ← רק אם --mask: עותק ממוסך של redisscope_html
 ├── redisscope_logs/                      ← לוגים של ריצת הכלי
 │   ├── data_generation.log
 │   ├── global.log
 │   └── plugin_*.log
-├── redisscope_upload_to_ticket/          ← קבצים מסוננים להעלאה לכרטיס
-│   ├── redisscope_<dirname>_Report.html  ← (העתק)
-│   └── mask_mappings.json                ← (רק אם --mask)
 ├── redisscope_sp/                        ← רק עם --sp: חבילת תמיכה מחולצת
 └── .redisscope_extraction_error.json     ← רק אם חילוץ נכשל חלקית
 ```
@@ -743,11 +806,25 @@ REDISSCOPE_DISABLE_JSON_EXPORT=1 ./redisscope --sp sp.tar.gz
 | תיקייה | מטרה |
 |---|---|
 | `redisscope_all/` | אוסף הנתונים הגולמיים שנאספו מהחבילה — קבצי JSON ו-TXT שמשמשים לבניית הדוחות |
-| `redisscope_html/` | תיקיית הדוח הראשית. **אם משתמשים ב-multi-page** — מכילה את כל הדפים והנכסים |
+| `redisscope_html/` | תיקיית הדוח הראשית. במצב multi-page (ברירת מחדל) — מכילה את כל הדפים, התת-תיקייה `pages/` והנכסים |
 | `redisscope_html_mask/` | רק אם הוגדר `--mask`. עותק מצונזר של `redisscope_html/` |
 | `redisscope_logs/` | לוגי ריצה של הכלי עצמו (פתרון בעיות בכלי, לא בחבילה הנותחת) |
-| `redisscope_upload_to_ticket/` | **תיקיית המוצר המרכזית** — קבצים שיש להעלות לכרטיס התמיכה |
 | `redisscope_sp/` | רק אם הוגדר `--sp` — תיקיית חילוץ של חבילת התמיכה |
+
+### מה להעלות לטיקט תמיכה
+
+**הזרימה הרשמית של Redis (לפי [התיעוד](https://redis.io/docs/latest/operate/rs/installing-upgrading/creating-support-package/)):**
+- הלקוח מייצר חבילת תמיכה (`rladmin cluster debug_info` או דרך UI) → מקבל `debuginfo.tar.gz`
+- הלקוח מעלה את `debuginfo.tar.gz` ישירות לפורטל התמיכה של Redis
+- צוות Redis Support מריץ RedisScope פנימית ומחזיר ללקוח "Cluster Health Analysis"
+
+**אם בכל זאת רוצים לשתף ידנית את פלט RedisScope:**
+
+| תרחיש | מה להעביר |
+|---|---|
+| ריצה רגילה | `redisscope_healthcheck_report.html` בלבד (קל לפתיחה), או כל `redisscope_html/` (יותר עשיר) |
+| עם `--mask` | רק `redisscope_html_mask/` — שומרים את `mask_mappings.json` פנימית |
+| מצב AA | `aa_multi_cluster_report.html` + `redisscope_html/` |
 
 ### הקובץ `.redisscope_extraction_error.json`
 
@@ -1222,9 +1299,328 @@ redisscope_logs/
 - `--k8s`
 - `--export-json`
 
+### תיקיות וקבצים שמופיעים ב-PDF אבל לא בקוד
+
+| מה ה-PDF טוען | מה הקוד באמת עושה |
+|---|---|
+| יוצר תיקייה `redisscope_upload_to_ticket/` עם הקבצים להעלאה | **לא יוצר את התיקייה**. הקבוע מוגדר ב-`general/const.py` אך אינו בשימוש בשום מודול. |
+| יוצר קובץ `redisscope_<directory_name>_Report.html` | יוצר `redisscope_healthcheck_report.html` (שם קבוע, ללא הזרקת שם תיקייה). במצב `--aa` יוצר גם `aa_multi_cluster_report.html`. |
+
+### היחס בין RedisScope לתיעוד הרשמי של Redis
+
+ה-[תיעוד הרשמי של Redis ליצירת support package](https://redis.io/docs/latest/operate/rs/installing-upgrading/creating-support-package/) **לא מזכיר את RedisScope בכלל**. הזרימה הציבורית של Redis היא:
+
+1. הלקוח מייצר `debuginfo.tar.gz` עם `rladmin cluster debug_info` או דרך UI.
+2. הלקוח מעלה ל-Redis Support דרך פורטל / SFTP / מייל.
+3. Redis Support **מריצים פנימית RedisScope** על החבילה ומחזירים ללקוח "Cluster Health Analysis" עם המלצות ותובנות.
+
+לכן RedisScope הוא כלי **פנימי של Redis Support**, לא כלי שלקוחות מריצים בעצמם. ה-PDF הישן נכתב כנראה למבט פנימי, ושאריות שלו (כמו `redisscope_upload_to_ticket/`) משקפות זרימת עבודה ישנה.
+
 ---
 
-## 19. Cheat Sheet — תרגום מהיר
+## 19. מה אתה רואה בדוח ה-HTML
+
+כשאתה פותח את הדוח בדפדפן, יש לך **תפריט ניווט צדדי** עם הסקציות הבאות. כל סקציה מכילה טבלה אחת או יותר. החלוקה הוצאה ישירות מקובצי ההגדרות של הכלי (`conf/html_templates/sections/`).
+
+### 19.1 המבנה הראשי של הדוח
+
+| # | סקציה (display name) | תוכן |
+|---|---|---|
+| 1 | **Cluster** (5 tabs) | מידע על האשכול: גרסה, רישיון, nodes, modules, משתמשים, LDAP, אבטחה, תעודות, persistence, 3rd party, רשת |
+| 2 | **Databases Overview** | פירוט מסדי נתונים, תצורה, שימוש, slowlog, cmdstats, buffers, clients |
+| 3 | **Alerts** | התראות פעילות, היסטוריה והגדרות התראה |
+| 4 | **Active-Active Overview** | (רק אם CRDB מוגדר) פרטי CRDB, מצב syncer, AA לא בשימוש |
+| 5 | **Failover Events** | אירועי failover ו-CCS failover |
+| 6 | **Log Analysis** | דפוסי לוג שזוהו, ספירת אירועים |
+| 7 | **Timeline** | ציר זמן של אירועי האשכול |
+| 8 | **Recommendations** | המלצות לתיקון מסוננות לפי חומרה |
+| 9 | **Test Results** | תוצאות מלאות של כל הבדיקות (TEST PASSED / TEST FAILED) |
+| 10 | **Test Summary** | סיכום מספרי של תוצאות הבדיקות |
+| 11 | **RDI Overview** | (רק אם RDI מותקן) צינורות ה-RDI |
+| 12 | **Azure Overview** | (רק אם Azure) מידע על Azure agents |
+| 13 | **Kubernetes Overview** | (רק במצב `--k8s`) Pods, services, deployments, StatefulSets, וכו' |
+| 14 | **CCS Viewer** | תצוגת CCS גולמית |
+| 15 | **RLADMIN** | פלט מלא של `rladmin status` |
+| 16 | **Replica Of Overview** | (רק אם Replica Of מוגדר) פירוט הגדרות replication |
+
+### 19.2 סקציית Cluster — 5 ה-Tabs
+
+זו הסקציה המרכזית, היחידה שמחולקת ל-tabs:
+
+**Tab 1 — Cluster Overview** (order 1)
+- `CLUSTER_INFORMATION` — גרסה, מספר nodes, תאריך יצירה, profile (high/low/default), K8S/Azure flags
+- `CLUSTER_SETTINGS` — הגדרות cluster + תיאור מילולי לכל הגדרה
+- `LICENSE` — owner, name, valid from/to, RAM shards limit, flash shards limit, features (trial/enterprise)
+- `NODES` — לכל node: IP, role, up since, version, cores, memory, max listeners/redis, swap, OS, quorum only, MM, ROF
+- `NODES_COMPARISON` — השוואת nodes זה מול זה
+- `MODULES` — RediSearch, RedisJSON, RedisGraph וכו'
+- `USERS` — משתמשים מוגדרים
+- `LDAP`, `LDAP_MAPPING` — תצורת LDAP
+- `CLUSTER_SECURITY` — הגדרות אבטחה
+
+**Tab 2 — Certificates** — דוח מפורט על תעודות (תאריכי תפוגה, SAN, חתימה)
+
+**Tab 3 — Persistence Files** — קבצי AOF/RDB לכל shard
+
+**Tab 4 — 3rd Party** — תהליכים שאינם של Redis Enterprise שרצים על ה-nodes
+
+**Tab 5 — Network Issues** — בעיות רשת שזוהו
+
+### 19.3 הסקציה הקריטית: Recommendations
+
+זו הסקציה הכי שימושית בניטור עצמי. היא מכילה **4 טבלאות מסוננות לפי חומרה**:
+
+| טבלה | כותרת בדוח | מה יש בה |
+|---|---|---|
+| `CRITICAL_RECOMMENDATIONS` | 🚨 CRITICAL | בעיות שדורשות טיפול **מיידי** — shards down, fail-over שנתקע |
+| `HIGH_RECOMMENDATIONS` | ⚠️ HIGH | בעיות חשובות — חוסר RAM, missing shards, רישיון trial |
+| `OTHERS_RECOMMENDATIONS` | (others) | בעיות פחות דחופות — אופטימיזציות |
+| `CUSTOMER_RECOMMENDATIONS` | Customer Recommendations | המלצות שכדאי להעביר ללקוח/בעל ה-cluster |
+
+לכל שורה יש את העמודות:
+- `Item` — מה הרכיב (Node:1, Redis:3, Bdb:2, Cluster, וכו')
+- `Error` — תיאור קצר של הבעיה
+- `How to try to fix` — **הוראות תיקון ספציפיות**
+
+זו הטבלה שצריכה לפתוח כל בוקר אם רץ ניטור פרואקטיבי.
+
+### 19.4 סקציית Test Results — פלט מלא
+
+הטבלה הזו (`TESTS_RESULTS_REPORT`) מציגה את כל הבדיקות שהכלי הריץ עם:
+- `Item` — מה נבדק
+- `Error` — שם הבדיקה
+- `Error Description` — תיאור מורחב
+- `Category` — BDBS / NODES / CLUSTER / LOGS וכו'
+- `Error Source` — מאיפה הגיע המידע (איזה קובץ בחבילה)
+- `Error Severity` — CRITICAL / HIGH / MEDIUM / LOW
+
+### 19.5 סקציית Timeline
+
+ציר זמן ויזואלי של אירועים — `failover`, restarts, alerts, configuration changes. **מאוד שימושי לתחקיר תקלה** — מאפשר לראות מה קרה מסביב לזמן הבעיה.
+
+### 19.6 סקציית Log Analysis
+
+`LOG_ANALYSIS_REPORT` — מציג דפוסים שזוהו בלוגים, ספירת המופעים שלהם לכל node. הדפוסים מוגדרים ב-`conf/patterns/*.json` של הכלי וכוללים מתאמי שגיאות ידועות, אזהרות, errors מ-syncer, mgr, dmc וכו'.
+
+מצב `--count-pattern-occurrences` מרחיב את המידע כאן — סופר את כל המופעים לפי תבנית, לא רק שיש/אין.
+
+### 19.7 הרובד התחתון — איך לקרוא את הדוח כ-SRE
+
+הסדר המומלץ לסקירה יומית (3-5 דקות):
+1. **Recommendations → CRITICAL** — אם יש משהו, להגיב מיד.
+2. **Recommendations → HIGH** — לתעדף לטיפול היום.
+3. **Test Summary** — סקירה כמותית: כמה TEST FAILED?
+4. **Alerts** — מה התראות פעילות?
+5. **Timeline** — האם יש "אירועים חריגים" שלא הוסברו על ידי השלבים הקודמים?
+
+הסדר המומלץ לתחקיר תקלה (עם `--start/--end`):
+1. **Failover Events** — מה קרה ומתי
+2. **Timeline** — הקשר רחב יותר
+3. **Log Analysis** — מה הלוגים מראים סביב הזמן
+4. **Recommendations** — מה הכלי ממליץ
+
+---
+
+## 20. אוטומציה — סריקה תקופתית של מספר אשכולות
+
+זה ה-use case המרכזי לשימוש פנימי. אתה רוצה שמערכת תרוץ כל יום/3 ימים, תמשוך support packages מכל הקלאסטרים שלך, תריץ עליהם RedisScope ותתריע על ממצאים חדשים.
+
+### 20.1 איך מייצרים support package מ-cluster
+
+יש שלוש דרכים שמתועדות ב-[תיעוד הרשמי של Redis](https://redis.io/docs/latest/operate/rs/installing-upgrading/creating-support-package/):
+
+**א. דרך CLI (מומלץ לאוטומציה):**
+```bash
+# יש להריץ על כל node או רק על המאסטר
+/opt/redislabs/bin/rladmin cluster debug_info
+# יוצר tar.gz ב-/tmp/ של ה-node
+```
+
+**ב. דרך REST API (הכי אוטומטי):**
+```bash
+# Download cluster-wide debug info
+curl -k -u "<re_user>:<re_pass>" \
+  "https://<cluster-fqdn>:9443/v1/cluster/debuginfo" \
+  -o debuginfo.tar.gz
+
+# או רק nodes
+curl -k -u "<re_user>:<re_pass>" \
+  "https://<cluster-fqdn>:9443/v1/nodes/debuginfo" \
+  -o nodes-debuginfo.tar.gz
+
+# או רק databases
+curl -k -u "<re_user>:<re_pass>" \
+  "https://<cluster-fqdn>:9443/v1/bdbs/debuginfo" \
+  -o bdbs-debuginfo.tar.gz
+```
+
+**ג. דרך UI (לא רלוונטי לאוטומציה).**
+
+> אם `/tmp` של ה-node קטן ויש כשל, אפשר להגדיר נתיב חלופי:
+> ```
+> rladmin cluster config debuginfo_path <path>
+> ```
+
+### 20.2 סקריפט סריקה מלא — תבנית
+
+נניח שיש לך 3 קלאסטרים. הסקריפט פועל לפי הזרימה: למשוך → לנתח → להשוות → להתריע.
+
+```bash
+#!/bin/bash
+# /opt/redisscope/scripts/scan-all-clusters.sh
+# סורק את כל הקלאסטרים ויוצר דוחות
+
+set -euo pipefail
+
+# הגדרות
+CLUSTERS=(
+  "cluster-prod-us:cluster-prod-us.example.com:9443"
+  "cluster-prod-eu:cluster-prod-eu.example.com:9443"
+  "cluster-staging:cluster-staging.example.com:9443"
+)
+RS_USER="${RE_API_USER:-admin@example.com}"
+RS_PASS="${RE_API_PASS:?Need to set RE_API_PASS}"
+WORK_DIR="${HOME}/redisscope-data/scans"
+DATE=$(date +%Y-%m-%d)
+REDISSCOPE_BIN="/opt/redisscope/redisscope"
+LOG="${WORK_DIR}/scan-${DATE}.log"
+
+mkdir -p "${WORK_DIR}/${DATE}"
+
+for cluster_def in "${CLUSTERS[@]}"; do
+  IFS=':' read -r name host port <<< "${cluster_def}"
+  echo "[$(date)] Scanning ${name}..." | tee -a "${LOG}"
+
+  cluster_dir="${WORK_DIR}/${DATE}/${name}"
+  mkdir -p "${cluster_dir}"
+  cd "${cluster_dir}"
+
+  # שלב 1: למשוך support package
+  if ! curl -sf -k -u "${RS_USER}:${RS_PASS}" \
+       "https://${host}:${port}/v1/cluster/debuginfo" \
+       -o "debuginfo.tar.gz"; then
+    echo "[$(date)] ERROR: Failed to fetch debuginfo from ${name}" | tee -a "${LOG}"
+    continue
+  fi
+
+  # שלב 2: להריץ RedisScope (מהיר - בלי logs)
+  "${REDISSCOPE_BIN}" --sp debuginfo.tar.gz --skiplogs --title "${name} - ${DATE}" \
+    >> "${LOG}" 2>&1 || echo "[$(date)] WARN: RedisScope returned non-zero for ${name}" | tee -a "${LOG}"
+
+  # שלב 3: לחלץ ממצאי CRITICAL לקובץ נפרד לקלות התראה
+  if [ -f "redisscope_html/pages/recommendations.html" ]; then
+    grep -oE 'CRITICAL[^<]+' "redisscope_html/pages/recommendations.html" \
+      > "critical-findings.txt" 2>/dev/null || true
+  fi
+
+  # שלב 4: למחוק את החבילה הגדולה לחסוך מקום
+  rm -f debuginfo.tar.gz
+
+  echo "[$(date)] Done with ${name}" | tee -a "${LOG}"
+done
+
+# שלב 5: השוואה עם הריצה הקודמת והתראה על ממצאים חדשים
+PREV_DATE=$(ls -1 "${WORK_DIR}" | grep -v "^${DATE}$" | sort | tail -1 || true)
+if [ -n "${PREV_DATE}" ]; then
+  for cluster_def in "${CLUSTERS[@]}"; do
+    name="${cluster_def%%:*}"
+    NEW="${WORK_DIR}/${DATE}/${name}/critical-findings.txt"
+    OLD="${WORK_DIR}/${PREV_DATE}/${name}/critical-findings.txt"
+
+    if [ -f "${NEW}" ] && [ -f "${OLD}" ]; then
+      NEW_FINDINGS=$(comm -23 <(sort -u "${NEW}") <(sort -u "${OLD}") || true)
+      if [ -n "${NEW_FINDINGS}" ]; then
+        # התראה - מייל/Slack/PagerDuty
+        echo "🚨 New CRITICAL findings on ${name}:" | tee -a "${LOG}"
+        echo "${NEW_FINDINGS}" | tee -a "${LOG}"
+        # למשל:
+        # echo "${NEW_FINDINGS}" | mail -s "RedisScope: New CRITICAL on ${name}" sre@example.com
+      fi
+    fi
+  done
+fi
+
+# שלב 6: ניקוי סריקות ישנות (שמירת 30 ימים בלבד)
+find "${WORK_DIR}" -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+
+echo "[$(date)] Scan complete" | tee -a "${LOG}"
+```
+
+### 20.3 cron entry
+
+```cron
+# כל 3 ימים ב-02:00 לפנות בוקר
+0 2 */3 * * /opt/redisscope/scripts/scan-all-clusters.sh
+
+# או יומי
+0 2 * * * /opt/redisscope/scripts/scan-all-clusters.sh
+```
+
+### 20.4 ארגון תיקיות התוצאות
+
+עם הסקריפט הזה תיווצר תיקייה כזו:
+
+```
+~/redisscope-data/scans/
+├── 2026-05-10/
+│   ├── cluster-prod-us/
+│   │   ├── redisscope_html/
+│   │   ├── redisscope_healthcheck_report.html
+│   │   └── critical-findings.txt
+│   ├── cluster-prod-eu/
+│   └── cluster-staging/
+├── 2026-05-13/
+├── 2026-05-16/
+└── ...
+```
+
+### 20.5 שרת לצפייה בכל הדוחות
+
+תוסיף שרת nginx פשוט שמגיש את כל היסטוריית הדוחות:
+
+```bash
+sudo dnf install -y nginx
+sudo tee /etc/nginx/conf.d/redisscope.conf <<'EOF'
+server {
+    listen 8080 default_server;
+    server_name _;
+    root /home/<username>/redisscope-data/scans;
+    autoindex on;
+    autoindex_exact_size off;
+    location / { try_files $uri $uri/ =404; }
+}
+EOF
+sudo systemctl enable --now nginx
+```
+
+עכשיו `http://<server>:8080/` נותן לך browser של כל הסריקות לפי תאריך → cluster → דוח.
+
+### 20.6 הצעות הרחבה
+
+**א. תוסיף ל-Prometheus/Grafana:**
+   - parser שמושך את `redisscope_all/test_summary.json` ומפיק מטריקות (count of TEST FAILED לפי category)
+   - Grafana מציג trend לאורך זמן
+
+**ב. אינטגרציה עם ticket system:**
+   - יוצר ticket אוטומטית ב-Jira/Zendesk כשמופיע CRITICAL חדש
+   - מצרף את הדוח HTML
+
+**ג. השוואה הדוקה יותר:**
+   - שמירת JSON מובנה (`--export-json` המוסתר!) מאפשר השוואה תכנותית עמוקה יותר בין ריצות
+
+**ד. סריקה לפני שדרוג כל-cluster:**
+   - לפני כל פעולה גדולה (שדרוג גרסה, החלפת חומרה), הרץ ידנית והשווה לסריקה הקבועה — לוודא שאין רגרסיה
+
+### 20.7 שיקולי אבטחה לקרון
+
+- **סיסמת REST API:** שמור ב-`/etc/redisscope/credentials` עם הרשאות `600`, וטען מתוך הסקריפט עם `source`. אל תשים בקוד או ב-cron.
+- **הרצה כמשתמש לא-root:** הסקריפט לא דורש root. רוץ עם user יעודי `redisscope`.
+- **גישת רשת:** המכונה צריכה גישת outgoing לפורט 9443 של כל cluster.
+- **שמירת היסטוריה:** הניקוי האוטומטי (30 ימים) חשוב — אחרת תיגמר לך הדיסק.
+
+---
+
+## 21. Cheat Sheet — תרגום מהיר
 
 ### הפעלות נפוצות
 
@@ -1294,16 +1690,18 @@ cd aa-dir; ../redisscope --aa
 | `--version` | — | flag | גרסה ויציאה |
 | `--help` | `-h` | flag | עזרה |
 
-### תיקיות פלט בקצרה
+### תיקיות וקבצי פלט בקצרה
 
-| תיקייה | מה יש בה | תעלה לכרטיס? |
+| פריט | מה זה | תעלה לכרטיס? |
 |---|---|---|
-| `redisscope_html/` | HTML מלא | אם לא masked |
-| `redisscope_html_mask/` | HTML ממוסך | ✅ כן |
+| `redisscope_healthcheck_report.html` | **הדוח HTML הראשי** (שם קבוע) | ✅ כן (קובץ יחיד) |
+| `aa_multi_cluster_report.html` | דוח HTML למצב `--aa` | ✅ כן (קובץ יחיד) |
+| `redisscope_html/` | HTML מלא (multi-page) | אם רוצים גישה לכל הדפים |
+| `redisscope_html_mask/` | HTML ממוסך (רק עם `--mask`) | ✅ כן, מועדף על פני html/ |
 | `redisscope_all/` | נתונים גולמיים | בדרך כלל לא |
 | `redisscope_logs/` | לוגי הכלי | רק לבדיקת בעיות בכלי |
-| `redisscope_upload_to_ticket/` | אוסף מסונן | ✅ כן |
-| `redisscope_sp/` | חבילה מחולצת | ❌ לא |
+| `redisscope_sp/` | חבילה מחולצת (רק עם `--sp`) | ❌ לא |
+| ~~`redisscope_upload_to_ticket/`~~ | ⚠️ **לא נוצר ב-v1.24.5** למרות שמופיע ב-PDF הישן | — |
 
 ---
 
