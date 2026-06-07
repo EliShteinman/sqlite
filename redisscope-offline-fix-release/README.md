@@ -25,6 +25,37 @@ sudo mv redisscope-offline-fix /usr/local/bin/
 > הבינארי הוא x86_64 ל-Linux/RHEL9 — בדיוק כמו redisscope עצמו. אין צורך ב-Python
 > ובאף תלות. הכל ארוז בתוכו.
 
+## בדיקת הגרסה המותקנת
+
+```bash
+redisscope-offline-fix --version
+```
+
+## עדכון לגרסה חדשה
+
+הכלי הוא קובץ בודד ללא הגדרות או state, ולכן עדכון = החלפת הקובץ:
+
+```bash
+# 1. ודא איזו גרסה מותקנת כעת
+redisscope-offline-fix --version
+
+# 2. החלף את הבינארי הישן בחדש (דורס את הקובץ הקיים)
+chmod +x redisscope-offline-fix
+sudo mv -f redisscope-offline-fix /usr/local/bin/redisscope-offline-fix
+
+# 3. ודא שהעדכון נקלט
+redisscope-offline-fix --version   # אמור להציג 1.1.0
+```
+
+> **חשוב — דוחות שכבר תוקנו בגרסה הישנה:** הגרסה הישנה (1.0.0) לא הכירה את
+> vis-network, ולכן בדוחות עם טופולוגיית רשת היא השאירה את הקישור הזה כפי שהוא.
+> פשוט הרץ את הגרסה החדשה שוב על אותם דוחות — הכלי idempotent ויטמיע רק את מה
+> שנותר חיצוני (כולל vis-network), בלי לפגוע במה שכבר תוקן:
+>
+> ```bash
+> redisscope-offline-fix /path/to/redisscope_html
+> ```
+
 ## שימוש
 
 ```bash
@@ -66,8 +97,11 @@ shasum -a 256 -c <(echo "$(cat redisscope-offline-fix.sha256)  redisscope-offlin
 
 הבינארי אורז בתוכו את הספריות הבאות (כולל הפונטים):
 Bootstrap 5.3.0, Bootstrap Icons (1.10.0 / 1.10.5 / 1.11.0), jQuery 3.7.0,
-DataTables 1.13.6 + Buttons 2.4.2, Plotly 2.27.0, Font Awesome 6.4.0, JSZip 3.10.1,
-ולוגו Red Hat.
+DataTables 1.13.6 + Buttons 2.4.2, Plotly 2.27.0, vis-network 9.1.2 (טופולוגיית רשת),
+Font Awesome 6.4.0, JSZip 3.10.1, ולוגו Red Hat.
+
+> הערה: RedisScope מקשר ל-CSS של vis-network בנתיב שמחזיר 404 (ב-vis-network 9
+> הסגנונות ארוזים בתוך ה-JS). הכלי מתקן זאת — הוא מטמיע CSS תקין מנתיב עובד.
 
 > אם בעתיד RedisScope יעבור לגרסת ספרייה חדשה, יש להוסיף את ה-URL לכלי הבנייה
 > ולבנות מחדש (ראה תיקיית המקור `redisscope_offline_fixer/`).
